@@ -1,4 +1,5 @@
 // src/main.rs
+
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyCode, MouseButton,
@@ -64,16 +65,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                             .unwrap();
                     }
                     CEvent::Key(key_event) => {
+                        tx_clone
+                            .send(Event::Input(CEvent::Key(key_event)))
+                            .unwrap();
+
                         if key_event.code == KeyCode::Char('q') {
-                            // Send the event and exit the thread
-                            tx_clone
-                                .send(Event::Input(CEvent::Key(key_event)))
-                                .unwrap();
-                            break;
-                        } else {
-                            tx_clone
-                                .send(Event::Input(CEvent::Key(key_event)))
-                                .unwrap();
+                            break; // Exit the thread on 'q'
                         }
                     }
                     _ => {}
@@ -107,6 +104,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut dragging = false;
     let mut drag_index = None;
 
+    // Variables for editing todo names
+    let mut editing_index: Option<usize> = None;
+    let mut input_buffer = String::new();
+
     // Main loop
     loop {
         // Get the terminal size
@@ -116,17 +117,44 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // Rendering
         terminal.draw(|f| {
-            ui(f, &todos);
+            ui(f, &todos, editing_index, &input_buffer);
         })?;
 
         // Event handling
         match rx.recv()? {
             Event::Input(event) => match event {
                 CEvent::Key(key_event) => {
-                    if key_event.code == KeyCode::Char('q') {
-                        break; // Exit the main loop
+                    if let Some(i) = editing_index {
+                        // We are editing a todo name
+                        match key_event.code {
+                            KeyCode::Char(c) => {
+                                input_buffer.push(c);
+                            }
+                            KeyCode::Backspace => {
+                                input_buffer.pop();
+                            }
+                            KeyCode::Enter => {
+                                // Update the todo's name and exit edit mode
+                                todos[i].name = input_buffer.clone();
+                                input_buffer.clear();
+                                editing_index = None;
+                                // Save the todos after renaming
+                                save_todos(&todos);
+                            }
+                            KeyCode::Esc => {
+                                // Cancel editing
+                                input_buffer.clear();
+                                editing_index = None;
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        // Not editing - existing code
+                        if key_event.code == KeyCode::Char('q') {
+                            break; // Exit the main loop
+                        }
+                        // Handle other key events if needed
                     }
-                    // Handle other key events if needed
                 }
                 CEvent::Mouse(mouse_event) => match mouse_event.kind {
                     MouseEventKind::Down(button) => {
@@ -140,17 +168,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     break;
                                 }
                                 if is_inside(mouse_pos, *chunk) {
-                                    dragging = true;
-                                    drag_index = Some(i);
-                                    update_progress(
-                                        &mut todos[i],
-                                        *chunk,
-                                        mouse_event.column,
-                                    );
                                     clicked_on_todo = true;
-
-                                    // Save the todos after updating progress
-                                    save_todos(&todos);
+                                    if mouse_event.row == chunk.y {
+                                        // Clicked on the title line - start editing
+                                        editing_index = Some(i);
+                                        input_buffer = todos[i].name.clone();
+                                    } else if editing_index.is_none() {
+                                        // Start dragging to update progress
+                                        dragging = true;
+                                        drag_index = Some(i);
+                                        update_progress(&mut todos[i], *chunk, mouse_event.column);
+                                        // Save the todos after updating progress
+                                        save_todos(&todos);
+                                    }
                                     break;
                                 }
                             }
@@ -163,7 +193,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                                             name: format!("TodoName{}", todos.len() + 1),
                                             progress: 0,
                                         });
-
                                         // Save the todos after adding a new one
                                         save_todos(&todos);
                                     }
@@ -172,11 +201,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                     MouseEventKind::Drag(button) => {
-                        if dragging && button == MouseButton::Left {
+                        if editing_index.is_none() && dragging && button == MouseButton::Left {
                             if let Some(i) = drag_index {
                                 let chunk = chunks[i];
                                 update_progress(&mut todos[i], chunk, mouse_event.column);
-
                                 // Save the todos after updating progress
                                 save_todos(&todos);
                             }
@@ -212,13 +240,29 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 // Function to render the UI
-fn ui<B: Backend>(f: &mut ratatui::Frame<B>, todos: &[Todo]) {
+fn ui<B: Backend>(
+    f: &mut ratatui::Frame<B>,
+    todos: &[Todo],
+    editing_index: Option<usize>,
+    input_buffer: &str,
+) {
     let chunks = compute_chunks(f.size(), todos);
 
     for (i, todo) in todos.iter().enumerate() {
+        let mut title = String::new();
+        let mut style = Style::default();
+
+        if editing_index == Some(i) {
+            // Render input buffer with a cursor
+            title = format!("{}_", input_buffer); // Add cursor
+            style = Style::default().fg(Color::Yellow);
+        } else {
+            title = todo.name.clone();
+        }
+
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(todo.name.clone());
+            .title(Span::styled(title, style));
 
         let gauge = Gauge::default()
             .block(block)
