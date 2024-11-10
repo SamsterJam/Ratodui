@@ -101,6 +101,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Variables for editing todo names
     let mut editing_index: Option<usize> = None;
     let mut input_buffer = String::new();
+    let mut just_started_editing = false; // Flag to indicate if we just entered edit mode
 
     // Main loop
     loop {
@@ -116,108 +117,108 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // Event handling
         match rx.recv()? {
-            Event::Input(event) => match event {
-                CEvent::Key(key_event) => {
-                    if let Some(i) = editing_index {
-                        // We are editing a todo name
-                        match key_event.code {
-                            KeyCode::Char(c) => {
-                                input_buffer.push(c);
+            Event::Input(event) => {
+                if let Some(i) = editing_index {
+                    // We are in edit mode
+                    match event {
+                        CEvent::Key(key_event) => {
+                            match key_event.code {
+                                KeyCode::Char(c) => {
+                                    input_buffer.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    input_buffer.pop();
+                                }
+                                KeyCode::Enter | KeyCode::Esc => {
+                                    // Update the todo's name and exit edit mode
+                                    todos[i].name = input_buffer.clone();
+                                    input_buffer.clear();
+                                    editing_index = None;
+                                    // Save the todos after renaming
+                                    save_todos(&todos);
+                                }
+                                _ => {
+                                    // Any other key press exits edit mode and saves the name
+                                    todos[i].name = input_buffer.clone();
+                                    input_buffer.clear();
+                                    editing_index = None;
+                                    // Save the todos after renaming
+                                    save_todos(&todos);
+
+                                    // Now handle the key event as usual
+                                    if key_event.code == KeyCode::Char('q') {
+                                        break; // Exit the main loop
+                                    }
+                                    // Handle other key events if needed
+                                }
                             }
-                            KeyCode::Backspace => {
-                                input_buffer.pop();
-                            }
-                            KeyCode::Enter => {
-                                // Update the todo's name and exit edit mode
-                                todos[i].name = input_buffer.clone();
-                                input_buffer.clear();
-                                editing_index = None;
-                                // Save the todos after renaming
-                                save_todos(&todos);
-                            }
-                            KeyCode::Esc => {
-                                // Cancel editing
-                                input_buffer.clear();
-                                editing_index = None;
-                            }
-                            _ => {}
                         }
-                    } else {
-                        // Not editing - existing code
-                        if key_event.code == KeyCode::Char('q') {
-                            break; // Exit the main loop
+                        CEvent::Mouse(mouse_event) => {
+                            if just_started_editing {
+                                // Ignore the mouse event that initiated edit mode
+                                just_started_editing = false;
+                            } else {
+                                match mouse_event.kind {
+                                    MouseEventKind::Moved => {
+                                        // Do nothing, stay in edit mode
+                                    }
+                                    _ => {
+                                        // For other mouse events, exit edit mode
+                                        todos[i].name = input_buffer.clone();
+                                        input_buffer.clear();
+                                        editing_index = None;
+                                        // Save the todos after renaming
+                                        save_todos(&todos);
+
+                                        // Now process the mouse event
+                                        process_mouse_event(
+                                            mouse_event,
+                                            &mut todos,
+                                            &mut dragging,
+                                            &mut drag_index,
+                                            &chunks,
+                                            &mut editing_index,
+                                            &mut input_buffer,
+                                            &mut just_started_editing,
+                                        );
+                                    }
+                                }
+                            }
                         }
-                        // Handle other key events if needed
+                        _ => {
+                            // Any other event exits edit mode and saves the name
+                            todos[i].name = input_buffer.clone();
+                            input_buffer.clear();
+                            editing_index = None;
+                            // Save the todos after renaming
+                            save_todos(&todos);
+                        }
+                    }
+                } else {
+                    // Not in edit mode
+                    match event {
+                        CEvent::Key(key_event) => {
+                            if key_event.code == KeyCode::Char('q') {
+                                break; // Exit the main loop
+                            }
+                            // Handle other key events if needed
+                        }
+                        CEvent::Mouse(mouse_event) => {
+                            process_mouse_event(
+                                mouse_event,
+                                &mut todos,
+                                &mut dragging,
+                                &mut drag_index,
+                                &chunks,
+                                &mut editing_index,
+                                &mut input_buffer,
+                                &mut just_started_editing,
+                            );
+                        }
+                        _ => {}
                     }
                 }
-                CEvent::Mouse(mouse_event) => match mouse_event.kind {
-                    MouseEventKind::Down(button) => {
-                        if button == MouseButton::Left {
-                            // Get the mouse position
-                            let mouse_pos = (mouse_event.column, mouse_event.row);
-                            let mut clicked_on_todo = false;
-                            // Check if click is on any todo item
-                            for (i, chunk) in chunks.iter().enumerate() {
-                                if i >= todos.len() {
-                                    break;
-                                }
-                                if is_inside(mouse_pos, *chunk) {
-                                    clicked_on_todo = true;
-                                    if mouse_event.row == chunk.y {
-                                        // Clicked on the title line - start editing
-                                        editing_index = Some(i);
-                                        if todos[i].name == "New Todo" {
-                                            input_buffer = String::new(); // Start with an empty input buffer
-                                        } else {
-                                            input_buffer = todos[i].name.clone(); // Start with the existing name
-                                        }
-                                    } else if editing_index.is_none() {
-                                        // Start dragging to update progress
-                                        dragging = true;
-                                        drag_index = Some(i);
-                                        update_progress(&mut todos[i], *chunk, mouse_event.column);
-                                        // Save the todos after updating progress
-                                        save_todos(&todos);
-                                    }
-                                    break;
-                                }
-                            }
-                            // Check if click is on the add button
-                            if !clicked_on_todo {
-                                if let Some(add_button_rect) = chunks.get(todos.len()) {
-                                    if is_inside(mouse_pos, *add_button_rect) {
-                                        // Add a new todo
-                                        todos.push(Todo {
-                                            name: String::from("New Todo"),
-                                            progress: 0,
-                                        });
-                                        // Save the todos after adding a new one
-                                        save_todos(&todos);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    MouseEventKind::Drag(button) => {
-                        if editing_index.is_none() && dragging && button == MouseButton::Left {
-                            if let Some(i) = drag_index {
-                                let chunk = chunks[i];
-                                update_progress(&mut todos[i], chunk, mouse_event.column);
-                                // Save the todos after updating progress
-                                save_todos(&todos);
-                            }
-                        }
-                    }
-                    MouseEventKind::Up(button) => {
-                        if button == MouseButton::Left {
-                            dragging = false;
-                            drag_index = None;
-                        }
-                    }
-                    _ => {}
-                },
-                _ => {}
-            },
+            }
             Event::Tick => {}
         }
     }
@@ -235,6 +236,86 @@ fn main() -> Result<(), Box<dyn Error>> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+// Function to process mouse events
+fn process_mouse_event(
+    mouse_event: event::MouseEvent,
+    todos: &mut Vec<Todo>,
+    dragging: &mut bool,
+    drag_index: &mut Option<usize>,
+    chunks: &Vec<Rect>,
+    editing_index: &mut Option<usize>,
+    input_buffer: &mut String,
+    just_started_editing: &mut bool,
+) {
+    match mouse_event.kind {
+        MouseEventKind::Down(button) => {
+            if button == MouseButton::Left {
+                // Get the mouse position
+                let mouse_pos = (mouse_event.column, mouse_event.row);
+                let mut clicked_on_todo = false;
+                // Check if click is on any todo item
+                for (i, chunk) in chunks.iter().enumerate() {
+                    if i >= todos.len() {
+                        break;
+                    }
+                    if is_inside(mouse_pos, *chunk) {
+                        clicked_on_todo = true;
+                        if mouse_event.row == chunk.y {
+                            // Clicked on the title line - start editing
+                            *editing_index = Some(i);
+                            *just_started_editing = true; // Indicate that we just entered edit mode
+                            if todos[i].name == "New Todo" {
+                                *input_buffer = String::new(); // Start with an empty input buffer
+                            } else {
+                                *input_buffer = todos[i].name.clone(); // Start with the existing name
+                            }
+                        } else {
+                            // Start dragging to update progress
+                            *dragging = true;
+                            *drag_index = Some(i);
+                            update_progress(&mut todos[i], *chunk, mouse_event.column);
+                            // Save the todos after updating progress
+                            save_todos(&todos);
+                        }
+                        break;
+                    }
+                }
+                // Check if click is on the add button
+                if !clicked_on_todo {
+                    if let Some(add_button_rect) = chunks.get(todos.len()) {
+                        if is_inside(mouse_pos, *add_button_rect) {
+                            // Add a new todo
+                            todos.push(Todo {
+                                name: String::from("New Todo"),
+                                progress: 0,
+                            });
+                            // Save the todos after adding a new one
+                            save_todos(&todos);
+                        }
+                    }
+                }
+            }
+        }
+        MouseEventKind::Drag(button) => {
+            if *editing_index == None && *dragging && button == MouseButton::Left {
+                if let Some(i) = *drag_index {
+                    let chunk = chunks[i];
+                    update_progress(&mut todos[i], chunk, mouse_event.column);
+                    // Save the todos after updating progress
+                    save_todos(&todos);
+                }
+            }
+        }
+        MouseEventKind::Up(button) => {
+            if button == MouseButton::Left {
+                *dragging = false;
+                *drag_index = None;
+            }
+        }
+        _ => {}
+    }
 }
 
 // Function to render the UI
@@ -320,7 +401,7 @@ fn is_inside(pos: (u16, u16), area: Rect) -> bool {
 fn load_todos() -> Vec<Todo> {
     let mut todos = Vec::new();
 
-    if let Some(proj_dirs) = ProjectDirs::from("com", "ratodui", "ratodui") {
+    if let Some(proj_dirs) = ProjectDirs::from("com", "todo", "todo") {
         let data_dir = proj_dirs.data_dir();
         let file_path = data_dir.join("todos.json");
 
@@ -336,7 +417,7 @@ fn load_todos() -> Vec<Todo> {
 
 // Function to save todos to a JSON file
 fn save_todos(todos: &Vec<Todo>) {
-    if let Some(proj_dirs) = ProjectDirs::from("com", "ratodui", "ratodui") {
+    if let Some(proj_dirs) = ProjectDirs::from("com", "todo", "todo") {
         let data_dir = proj_dirs.data_dir();
 
         // Create directories if they don't exist
