@@ -1,0 +1,249 @@
+// src/main.rs
+use crossterm::{
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyCode, MouseButton,
+        MouseEventKind,
+    },
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::{Backend, CrosstermBackend},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Style},
+    text::Span,
+    widgets::{Block, Borders, Gauge},
+    Terminal,
+};
+use std::{
+    error::Error,
+    io,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
+
+struct Todo {
+    name: String,
+    progress: u16, // Progress in percentage (0 - 100)
+}
+
+enum Event<I> {
+    Input(I),
+    Tick,
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    // Setup terminal
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Channel to receive input events
+    let (tx, rx) = mpsc::channel();
+    let tick_rate = Duration::from_millis(250);
+    let tx_clone = tx.clone();
+    thread::spawn(move || {
+        let mut last_tick = Instant::now();
+        loop {
+            // Poll for event
+            let timeout = tick_rate
+                .checked_sub(last_tick.elapsed())
+                .unwrap_or_else(|| Duration::from_secs(0));
+            if event::poll(timeout).unwrap() {
+                match event::read().unwrap() {
+                    CEvent::Mouse(mouse_event) => {
+                        tx_clone
+                            .send(Event::Input(CEvent::Mouse(mouse_event)))
+                            .unwrap();
+                    }
+                    CEvent::Key(key_event) => {
+                        if key_event.code == KeyCode::Char('q') {
+                            // Send the event and exit the thread
+                            tx_clone
+                                .send(Event::Input(CEvent::Key(key_event)))
+                                .unwrap();
+                            break;
+                        } else {
+                            tx_clone
+                                .send(Event::Input(CEvent::Key(key_event)))
+                                .unwrap();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if last_tick.elapsed() >= tick_rate {
+                tx_clone.send(Event::Tick).unwrap();
+                last_tick = Instant::now();
+            }
+        }
+    });
+
+    // Initialize todos
+    let mut todos = vec![
+        Todo {
+            name: String::from("TodoName1"),
+            progress: 20,
+        },
+        Todo {
+            name: String::from("TodoName2"),
+            progress: 32,
+        },
+    ];
+
+    // Variables for mouse interaction
+    let mut dragging = false;
+    let mut drag_index = None;
+
+    // Main loop
+    loop {
+        // Get the terminal size
+        let size = terminal.size()?;
+        // Compute the layout chunks
+        let chunks = compute_chunks(size, &todos);
+
+        // Rendering
+        terminal.draw(|f| {
+            ui(f, &todos);
+        })?;
+
+        // Event handling
+        match rx.recv()? {
+            Event::Input(event) => match event {
+                CEvent::Key(key_event) => {
+                    if key_event.code == KeyCode::Char('q') {
+                        break; // Exit the main loop
+                    }
+                    // Handle other key events if needed
+                }
+                CEvent::Mouse(mouse_event) => match mouse_event.kind {
+                    MouseEventKind::Down(button) => {
+                        if button == MouseButton::Left {
+                            // Get the mouse position
+                            let mouse_pos = (mouse_event.column, mouse_event.row);
+                            let mut clicked_on_todo = false;
+                            // Check if click is on any todo item
+                            for (i, chunk) in chunks.iter().enumerate() {
+                                if i >= todos.len() {
+                                    break;
+                                }
+                                if is_inside(mouse_pos, *chunk) {
+                                    dragging = true;
+                                    drag_index = Some(i);
+                                    update_progress(
+                                        &mut todos[i],
+                                        *chunk,
+                                        mouse_event.column,
+                                    );
+                                    clicked_on_todo = true;
+                                    break;
+                                }
+                            }
+                            // Check if click is on the add button
+                            if !clicked_on_todo {
+                                if let Some(add_button_rect) = chunks.get(todos.len()) {
+                                    if is_inside(mouse_pos, *add_button_rect) {
+                                        // Add a new todo
+                                        todos.push(Todo {
+                                            name: format!("TodoName{}", todos.len() + 1),
+                                            progress: 0,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    MouseEventKind::Drag(button) => {
+                        if dragging && button == MouseButton::Left {
+                            if let Some(i) = drag_index {
+                                let chunk = chunks[i];
+                                update_progress(&mut todos[i], chunk, mouse_event.column);
+                            }
+                        }
+                    }
+                    MouseEventKind::Up(button) => {
+                        if button == MouseButton::Left {
+                            dragging = false;
+                            drag_index = None;
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            },
+            Event::Tick => {}
+        }
+    }
+
+    // Cleanup before exiting
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    Ok(())
+}
+
+// Function to render the UI
+fn ui<B: Backend>(f: &mut ratatui::Frame<B>, todos: &[Todo]) {
+    let chunks = compute_chunks(f.size(), todos);
+
+    for (i, todo) in todos.iter().enumerate() {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(todo.name.clone());
+
+        let gauge = Gauge::default()
+            .block(block)
+            .gauge_style(Style::default().fg(Color::Blue).bg(Color::Black))
+            .percent(todo.progress);
+
+        f.render_widget(gauge, chunks[i]);
+    }
+
+    // Render the add button
+    let add_button = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            "[    +    ]",
+            Style::default().fg(Color::Green),
+        ));
+    f.render_widget(add_button, chunks[todos.len()]);
+}
+
+// Helper function to compute chunks based on the terminal size and todos
+fn compute_chunks(size: Rect, todos: &[Todo]) -> Vec<Rect> {
+    let constraints = todos
+        .iter()
+        .map(|_| Constraint::Length(3))
+        .chain(std::iter::once(Constraint::Length(3)))
+        .collect::<Vec<_>>();
+
+    Layout::default()
+        .direction(Direction::Vertical)
+        .margin(2)
+        .constraints(constraints)
+        .split(size)
+        .to_vec() // Convert Rc<[Rect]> to Vec<Rect>
+}
+
+// Function to update the progress of a todo based on mouse x position
+fn update_progress(todo: &mut Todo, area: Rect, mouse_x: u16) {
+    // Calculate new progress based on mouse_x position within the area
+    let progress = ((mouse_x.saturating_sub(area.x)) * 100 / area.width.max(1)).min(100);
+    todo.progress = progress as u16;
+}
+
+// Helper function to check if a point is inside a rectangle
+fn is_inside(pos: (u16, u16), area: Rect) -> bool {
+    pos.0 >= area.x
+        && pos.0 < area.x + area.width
+        && pos.1 >= area.y
+        && pos.1 < area.y + area.height
+}
