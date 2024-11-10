@@ -320,7 +320,7 @@ fn is_inside(pos: (u16, u16), area: Rect) -> bool {
 fn load_todos() -> Vec<Todo> {
     let mut todos = Vec::new();
 
-    if let Some(proj_dirs) = ProjectDirs::from("com", "todo", "todo") {
+    if let Some(proj_dirs) = ProjectDirs::from("com", "ratodui", "ratodui") {
         let data_dir = proj_dirs.data_dir();
         let file_path = data_dir.join("todos.json");
 
@@ -336,7 +336,7 @@ fn load_todos() -> Vec<Todo> {
 
 // Function to save todos to a JSON file
 fn save_todos(todos: &Vec<Todo>) {
-    if let Some(proj_dirs) = ProjectDirs::from("com", "todo", "todo") {
+    if let Some(proj_dirs) = ProjectDirs::from("com", "ratodui", "ratodui") {
         let data_dir = proj_dirs.data_dir();
 
         // Create directories if they don't exist
