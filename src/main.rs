@@ -7,6 +7,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use directories::ProjectDirs;
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Rect},
@@ -15,14 +16,17 @@ use ratatui::{
     widgets::{Block, Borders, Gauge},
     Terminal,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
+    fs,
     io,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 
+#[derive(Serialize, Deserialize)]
 struct Todo {
     name: String,
     progress: u16, // Progress in percentage (0 - 100)
@@ -83,16 +87,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     // Initialize todos
-    let mut todos = vec![
-        Todo {
-            name: String::from("TodoName1"),
-            progress: 20,
-        },
-        Todo {
-            name: String::from("TodoName2"),
-            progress: 32,
-        },
-    ];
+    let mut todos = load_todos();
+
+    // If no todos were loaded, initialize with defaults
+    if todos.is_empty() {
+        todos = vec![
+            Todo {
+                name: String::from("TodoName1"),
+                progress: 20,
+            },
+            Todo {
+                name: String::from("TodoName2"),
+                progress: 32,
+            },
+        ];
+    }
 
     // Variables for mouse interaction
     let mut dragging = false;
@@ -139,6 +148,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         mouse_event.column,
                                     );
                                     clicked_on_todo = true;
+
+                                    // Save the todos after updating progress
+                                    save_todos(&todos);
                                     break;
                                 }
                             }
@@ -151,6 +163,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                                             name: format!("TodoName{}", todos.len() + 1),
                                             progress: 0,
                                         });
+
+                                        // Save the todos after adding a new one
+                                        save_todos(&todos);
                                     }
                                 }
                             }
@@ -161,6 +176,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                             if let Some(i) = drag_index {
                                 let chunk = chunks[i];
                                 update_progress(&mut todos[i], chunk, mouse_event.column);
+
+                                // Save the todos after updating progress
+                                save_todos(&todos);
                             }
                         }
                     }
@@ -177,6 +195,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             Event::Tick => {}
         }
     }
+
+    // Before exiting, save the todos
+    save_todos(&todos);
 
     // Cleanup before exiting
     disable_raw_mode()?;
@@ -219,11 +240,14 @@ fn ui<B: Backend>(f: &mut ratatui::Frame<B>, todos: &[Todo]) {
 
 // Helper function to compute chunks based on the terminal size and todos
 fn compute_chunks(size: Rect, todos: &[Todo]) -> Vec<Rect> {
-    let constraints = todos
-        .iter()
-        .map(|_| Constraint::Length(3))
-        .chain(std::iter::once(Constraint::Length(3)))
-        .collect::<Vec<_>>();
+    let mut constraints: Vec<Constraint> = Vec::new();
+
+    for _ in todos {
+        constraints.push(Constraint::Length(3)); // Each todo takes up 3 rows
+    }
+
+    // Add constraint for the add button
+    constraints.push(Constraint::Length(3));
 
     Layout::default()
         .direction(Direction::Vertical)
@@ -236,8 +260,10 @@ fn compute_chunks(size: Rect, todos: &[Todo]) -> Vec<Rect> {
 // Function to update the progress of a todo based on mouse x position
 fn update_progress(todo: &mut Todo, area: Rect, mouse_x: u16) {
     // Calculate new progress based on mouse_x position within the area
-    let progress = ((mouse_x.saturating_sub(area.x)) * 100 / area.width.max(1)).min(100);
-    todo.progress = progress as u16;
+    let progress = ((mouse_x.saturating_sub(area.x)) * 100 / area.width.max(1)).min(100) as u16;
+    if todo.progress != progress {
+        todo.progress = progress;
+    }
 }
 
 // Helper function to check if a point is inside a rectangle
@@ -246,4 +272,48 @@ fn is_inside(pos: (u16, u16), area: Rect) -> bool {
         && pos.0 < area.x + area.width
         && pos.1 >= area.y
         && pos.1 < area.y + area.height
+}
+
+// Function to load todos from a JSON file
+fn load_todos() -> Vec<Todo> {
+    let mut todos = Vec::new();
+
+    if let Some(proj_dirs) = ProjectDirs::from("com", "your_company", "your_app_name") {
+        let data_dir = proj_dirs.data_dir();
+        let file_path = data_dir.join("todos.json");
+
+        if let Ok(contents) = fs::read_to_string(&file_path) {
+            if let Ok(loaded_todos) = serde_json::from_str::<Vec<Todo>>(&contents) {
+                todos = loaded_todos;
+            }
+        }
+    }
+
+    todos
+}
+
+// Function to save todos to a JSON file
+fn save_todos(todos: &Vec<Todo>) {
+    if let Some(proj_dirs) = ProjectDirs::from("com", "your_company", "your_app_name") {
+        let data_dir = proj_dirs.data_dir();
+
+        // Create directories if they don't exist
+        if let Err(e) = fs::create_dir_all(&data_dir) {
+            eprintln!("Failed to create data directory: {}", e);
+            return;
+        }
+
+        let file_path = data_dir.join("todos.json");
+
+        match serde_json::to_string_pretty(&todos) {
+            Ok(json) => {
+                if let Err(e) = fs::write(&file_path, json) {
+                    eprintln!("Failed to write to file: {}", e);
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to serialize todos: {}", e);
+            }
+        }
+    }
 }
