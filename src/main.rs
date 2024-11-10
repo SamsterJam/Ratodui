@@ -13,8 +13,8 @@ use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    text::Span,
-    widgets::{Block, Borders, Gauge},
+    text::{Span},
+    widgets::{Paragraph, Wrap},
     Terminal,
 };
 use serde::{Deserialize, Serialize};
@@ -238,13 +238,71 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// Function to render the UI
+fn ui<B: Backend>(
+    f: &mut ratatui::Frame<B>,
+    todos: &[Todo],
+    editing_index: Option<usize>,
+    input_buffer: &str,
+) {
+    let chunks = compute_chunks(f.size(), todos);
+
+    for (i, todo) in todos.iter().enumerate() {
+        let mut style = Style::default();
+        let title: String;
+
+        if editing_index == Some(i) {
+            // Render input buffer with a cursor
+            title = format!("{}_", input_buffer); // Add cursor
+            style = Style::default().fg(Color::Yellow);
+        } else {
+            title = todo.name.clone();
+        }
+
+        let area = chunks[i];
+
+        // Inside each chunk (line), create a horizontal layout
+        let horizontal_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(
+                [
+                    Constraint::Length(30), // Fixed width for todo name
+                    Constraint::Min(1),     // Remaining space for progress bar
+                ]
+                .as_ref(),
+            )
+            .split(area);
+
+        // The title goes into the first chunk
+        let title_paragraph = Paragraph::new(Span::styled(title, style));
+
+        f.render_widget(title_paragraph, horizontal_chunks[0]);
+
+        // Now build and render the progress bar in the second chunk
+
+        let progress_bar_width = horizontal_chunks[1].width;
+
+        let progress_bar = build_progress_bar(todo.progress, progress_bar_width as usize);
+
+        let progress_bar_paragraph = Paragraph::new(Span::raw(progress_bar));
+
+        f.render_widget(progress_bar_paragraph, horizontal_chunks[1]);
+    }
+
+    // Render the add button
+    let add_button_text = Span::styled("[     +     ]", Style::default().fg(Color::Green));
+    let add_button_paragraph = Paragraph::new(add_button_text).wrap(Wrap { trim: false });
+
+    f.render_widget(add_button_paragraph, chunks[todos.len()]);
+}
+
 // Function to process mouse events
 fn process_mouse_event(
     mouse_event: event::MouseEvent,
     todos: &mut Vec<Todo>,
     dragging: &mut bool,
     drag_index: &mut Option<usize>,
-    chunks: &Vec<Rect>,
+    chunks: &[Rect],
     editing_index: &mut Option<usize>,
     input_buffer: &mut String,
     just_started_editing: &mut bool,
@@ -262,8 +320,21 @@ fn process_mouse_event(
                     }
                     if is_inside(mouse_pos, *chunk) {
                         clicked_on_todo = true;
-                        if mouse_event.row == chunk.y {
-                            // Clicked on the title line - start editing
+
+                        // Split the line into title and progress bar
+                        let horizontal_chunks = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints(
+                                [
+                                    Constraint::Length(30), // Must match the ui function
+                                    Constraint::Min(1),     // Remaining space for progress bar
+                                ]
+                                .as_ref(),
+                            )
+                            .split(*chunk);
+
+                        if is_inside(mouse_pos, horizontal_chunks[0]) {
+                            // Clicked on the title area - start editing
                             *editing_index = Some(i);
                             *just_started_editing = true; // Indicate that we just entered edit mode
                             if todos[i].name == "New Todo" {
@@ -271,15 +342,17 @@ fn process_mouse_event(
                             } else {
                                 *input_buffer = todos[i].name.clone(); // Start with the existing name
                             }
-                        } else {
+                        } else if is_inside(mouse_pos, horizontal_chunks[1]) {
+                            // Clicked on the progress bar area
                             // Start dragging to update progress
                             *dragging = true;
                             *drag_index = Some(i);
-                            update_progress(&mut todos[i], *chunk, mouse_event.column);
+                            update_progress(&mut todos[i], horizontal_chunks[1], mouse_event.column);
                             // Save the todos after updating progress
                             save_todos(&todos);
                         }
-                        break;
+
+                        break; // We've found the clicked todo, so we can exit the loop
                     }
                 }
                 // Check if click is on the add button
@@ -302,7 +375,18 @@ fn process_mouse_event(
             if *editing_index == None && *dragging && button == MouseButton::Left {
                 if let Some(i) = *drag_index {
                     let chunk = chunks[i];
-                    update_progress(&mut todos[i], chunk, mouse_event.column);
+                    let horizontal_chunks = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints(
+                            [
+                                Constraint::Length(30), // Must match the ui function
+                                Constraint::Min(1),
+                            ]
+                            .as_ref(),
+                        )
+                        .split(chunk);
+
+                    update_progress(&mut todos[i], horizontal_chunks[1], mouse_event.column);
                     // Save the todos after updating progress
                     save_todos(&todos);
                 }
@@ -318,47 +402,54 @@ fn process_mouse_event(
     }
 }
 
-// Function to render the UI
-fn ui<B: Backend>(
-    f: &mut ratatui::Frame<B>,
-    todos: &[Todo],
-    editing_index: Option<usize>,
-    input_buffer: &str,
-) {
-    let chunks = compute_chunks(f.size(), todos);
+// Function to update the progress of a todo based on mouse x position
+fn update_progress(todo: &mut Todo, area: Rect, mouse_x: u16) {
+    // Position of the '[' character
+    let percent_str = format!(" {}%", todo.progress);
+    let extra_chars = 2 + percent_str.len(); // '[' and ']' and percentage
 
-    for (i, todo) in todos.iter().enumerate() {
-        let mut title = String::new();
-        let mut style = Style::default();
-
-        if editing_index == Some(i) {
-            // Render input buffer with a cursor
-            title = format!("{}_", input_buffer); // Add cursor
-            style = Style::default().fg(Color::Yellow);
-        } else {
-            title = todo.name.clone();
-        }
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(Span::styled(title, style));
-
-        let gauge = Gauge::default()
-            .block(block)
-            .gauge_style(Style::default().fg(Color::Blue).bg(Color::Black))
-            .percent(todo.progress);
-
-        f.render_widget(gauge, chunks[i]);
+    if area.width <= extra_chars as u16 {
+        // Not enough space, do nothing
+        return;
     }
 
-    // Render the add button
-    let add_button = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            "[    +    ]",
-            Style::default().fg(Color::Green),
-        ));
-    f.render_widget(add_button, chunks[todos.len()]);
+    // Calculate the width of the progress bar
+    let bar_width = area.width - extra_chars as u16;
+
+    // The progress bar starts after the '[' character
+    let progress_bar_start_x = area.x + 1; // Start after '['
+    let progress_bar_end_x = progress_bar_start_x + bar_width;
+
+    if mouse_x >= progress_bar_start_x && mouse_x <= progress_bar_end_x {
+        let relative_x = mouse_x - progress_bar_start_x;
+        let progress = ((relative_x * 100) / bar_width).min(100) as u16;
+        if todo.progress != progress {
+            todo.progress = progress;
+        }
+    }
+}
+
+// Function to build the ASCII progress bar
+fn build_progress_bar(progress: u16, width: usize) -> String {
+    // Width is the total width, we need to subtract for brackets and percentage
+    let percent_str = format!(" {}%", progress);
+    let extra_chars = 2 + percent_str.len(); // '[' and ']' and percentage
+
+    if width <= extra_chars {
+        // Not enough space to render progress bar
+        return format!("{}%", percent_str);
+    }
+
+    let bar_width = width - extra_chars;
+
+    let filled_blocks = (progress as usize * bar_width) / 100;
+    let empty_blocks = bar_width - filled_blocks;
+    format!(
+        "[{}{}]{}",
+        "#".repeat(filled_blocks),
+        "-".repeat(empty_blocks),
+        percent_str
+    )
 }
 
 // Helper function to compute chunks based on the terminal size and todos
@@ -366,27 +457,18 @@ fn compute_chunks(size: Rect, todos: &[Todo]) -> Vec<Rect> {
     let mut constraints: Vec<Constraint> = Vec::new();
 
     for _ in todos {
-        constraints.push(Constraint::Length(3)); // Each todo takes up 3 rows
+        constraints.push(Constraint::Length(1)); // Each todo takes up 1 row
     }
 
     // Add constraint for the add button
-    constraints.push(Constraint::Length(3));
+    constraints.push(Constraint::Length(1));
 
     Layout::default()
         .direction(Direction::Vertical)
-        .margin(2)
+        .margin(1) // Reduce margin to save space
         .constraints(constraints)
         .split(size)
         .to_vec() // Convert Rc<[Rect]> to Vec<Rect>
-}
-
-// Function to update the progress of a todo based on mouse x position
-fn update_progress(todo: &mut Todo, area: Rect, mouse_x: u16) {
-    // Calculate new progress based on mouse_x position within the area
-    let progress = ((mouse_x.saturating_sub(area.x)) * 100 / area.width.max(1)).min(100) as u16;
-    if todo.progress != progress {
-        todo.progress = progress;
-    }
 }
 
 // Helper function to check if a point is inside a rectangle
