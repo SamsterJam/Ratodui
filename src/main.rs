@@ -86,18 +86,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Initialize todos
     let mut todos = load_todos();
 
-    // If no todos were loaded, initialize with defaults
+    // If no todos were loaded, initialize with a new todo
     if todos.is_empty() {
-        todos = vec![
-            Todo {
-                name: String::from("TodoName1"),
-                progress: 20,
-            },
-            Todo {
-                name: String::from("TodoName2"),
-                progress: 32,
-            },
-        ];
+        todos.push(Todo {
+            name: String::from("New Todo"),
+            progress: 0,
+        });
     }
 
     // Variables for mouse interaction
@@ -172,7 +166,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     if mouse_event.row == chunk.y {
                                         // Clicked on the title line - start editing
                                         editing_index = Some(i);
-                                        input_buffer = todos[i].name.clone();
+                                        if todos[i].name == "New Todo" {
+                                            input_buffer = String::new(); // Start with an empty input buffer
+                                        } else {
+                                            input_buffer = todos[i].name.clone(); // Start with the existing name
+                                        }
                                     } else if editing_index.is_none() {
                                         // Start dragging to update progress
                                         dragging = true;
@@ -190,7 +188,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     if is_inside(mouse_pos, *add_button_rect) {
                                         // Add a new todo
                                         todos.push(Todo {
-                                            name: format!("TodoName{}", todos.len() + 1),
+                                            name: String::from("New Todo"),
                                             progress: 0,
                                         });
                                         // Save the todos after adding a new one
