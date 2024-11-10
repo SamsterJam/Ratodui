@@ -13,7 +13,7 @@ use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    text::{Span},
+    text::Span,
     widgets::{Paragraph, Wrap},
     Terminal,
 };
@@ -68,10 +68,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         tx_clone
                             .send(Event::Input(CEvent::Key(key_event)))
                             .unwrap();
-
-                        if key_event.code == KeyCode::Char('q') {
-                            break; // Exit the thread on 'q'
-                        }
+                        // Removed the break condition here
                     }
                     _ => {}
                 }
