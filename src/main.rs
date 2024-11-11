@@ -31,6 +31,8 @@ use std::{
 struct Todo {
     name: String,
     progress: u16, // Progress in percentage (0 - 100)
+    #[serde(default)]
+    completed: bool, // Field to mark completion
 }
 
 enum Event<I> {
@@ -88,6 +90,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         todos.push(Todo {
             name: String::from("New Todo"),
             progress: 0,
+            completed: false, // Initialize as not completed
         });
     }
 
@@ -247,6 +250,7 @@ fn ui<B: Backend>(
     for (i, todo) in todos.iter().enumerate() {
         let mut style = Style::default();
         let title: String;
+        let checkbox = if todo.completed { "[x]" } else { "[ ]" };
 
         if editing_index == Some(i) {
             // Render input buffer with a cursor
@@ -263,17 +267,32 @@ fn ui<B: Backend>(
             .direction(Direction::Horizontal)
             .constraints(
                 [
-                    Constraint::Length(30), // Fixed width for todo name
+                    Constraint::Length(35), // Adjusted length for checkbox and title
                     Constraint::Min(1),     // Remaining space for progress bar
                 ]
                 .as_ref(),
             )
             .split(area);
 
-        // The title goes into the first chunk
-        let title_paragraph = Paragraph::new(Span::styled(title, style));
+        // Further split the first chunk into checkbox and title
+        let checkbox_and_title_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(
+                [
+                    Constraint::Length(4), // For '[ ] '
+                    Constraint::Min(1),    // Remaining space for title
+                ]
+                .as_ref(),
+            )
+            .split(horizontal_chunks[0]);
 
-        f.render_widget(title_paragraph, horizontal_chunks[0]);
+        // Render the checkbox
+        let checkbox_paragraph = Paragraph::new(Span::raw(checkbox));
+        f.render_widget(checkbox_paragraph, checkbox_and_title_chunks[0]);
+
+        // Render the title
+        let title_paragraph = Paragraph::new(Span::styled(title, style));
+        f.render_widget(title_paragraph, checkbox_and_title_chunks[1]);
 
         // Now build and render the progress bar in the second chunk
 
@@ -323,14 +342,32 @@ fn process_mouse_event(
                             .direction(Direction::Horizontal)
                             .constraints(
                                 [
-                                    Constraint::Length(30), // Must match the ui function
+                                    Constraint::Length(35), // Must match the ui function
                                     Constraint::Min(1),     // Remaining space for progress bar
                                 ]
                                 .as_ref(),
                             )
                             .split(*chunk);
 
-                        if is_inside(mouse_pos, horizontal_chunks[0]) {
+                        // Further split the first chunk into checkbox and title
+                        let checkbox_and_title_chunks = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints(
+                                [
+                                    Constraint::Length(4), // For '[ ] '
+                                    Constraint::Min(1),    // Remaining space for title
+                                ]
+                                .as_ref(),
+                            )
+                            .split(horizontal_chunks[0]);
+
+                        if is_inside(mouse_pos, checkbox_and_title_chunks[0]) {
+                            // Clicked on the checkbox - toggle completed status
+                            todos[i].completed = !todos[i].completed;
+                            // Save the todos
+                            save_todos(&todos);
+                            return; // Exit function, no further processing needed
+                        } else if is_inside(mouse_pos, checkbox_and_title_chunks[1]) {
                             // Clicked on the title area - start editing
                             *editing_index = Some(i);
                             *just_started_editing = true; // Indicate that we just entered edit mode
@@ -360,6 +397,7 @@ fn process_mouse_event(
                             todos.push(Todo {
                                 name: String::from("New Todo"),
                                 progress: 0,
+                                completed: false, // Initialize as not completed
                             });
                             // Save the todos after adding a new one
                             save_todos(&todos);
@@ -376,7 +414,7 @@ fn process_mouse_event(
                         .direction(Direction::Horizontal)
                         .constraints(
                             [
-                                Constraint::Length(30), // Must match the ui function
+                                Constraint::Length(35), // Must match the ui function
                                 Constraint::Min(1),
                             ]
                             .as_ref(),
@@ -490,6 +528,9 @@ fn load_todos() -> Vec<Todo> {
             }
         }
     }
+
+    // Remove completed todos (filter out on startup)
+    todos.retain(|todo| !todo.completed);
 
     todos
 }
